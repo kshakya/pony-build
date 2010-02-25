@@ -7,7 +7,7 @@ from pony_client import BuildCommand, TestCommand, do, send,_run_command, \
 
 options, args = parse_cmdline()
 
-python_exe = 'python'
+python_exe = 'python2.6'
 if args:
     python_exe = args[0]
 
@@ -23,7 +23,7 @@ if not options.force_build:
         sys.exit(0)
 
 
-context = TempDirectoryContext()
+context = VirtualenvContext()
 commands = [ HgClone(repo_url, name='checkout'),
              BuildCommand([python_exe, 'setup.py', 'build_ext', '-i'],
                           name='compile'),
@@ -32,6 +32,7 @@ commands = [ HgClone(repo_url, name='checkout'),
 
 results = do(name, commands, context=context)
 client_info, reslist, files = results
+
 if options.report:
     print 'result: %s; sending' % (client_info['success'],)
     send(server_url, results, tags=tags)
@@ -39,7 +40,7 @@ else:
     print 'build result:'
     pprint.pprint(client_info)
     pprint.pprint(reslist)
-
+    
     print '(NOT SENDING BUILD RESULT TO SERVER)'
 
 if not client_info['success']:

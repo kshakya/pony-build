@@ -1,5 +1,5 @@
 from optparse import OptionParser
-from .. import web as qx_web
+from .. import qx_web
 
 if __name__ == '__main__':
 #    import figleaf

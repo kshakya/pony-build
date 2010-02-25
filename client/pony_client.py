@@ -26,72 +26,40 @@ pb_servers['default'] = pb_servers['pb-dev']
 
 ###
 
-DEBUG_LEVEL = 5
-INFO_LEVEL = 3
-WARNING_LEVEL = 2
-CRITICAL_LEVEL = 1
-_log_level = WARNING_LEVEL
-
-def log_debug(*args):
-    log(DEBUG_LEVEL, *args)
-    
-def log_info(*args):
-    log(INFO_LEVEL, *args)
-
-def log_warning(*args):
-    log(WARNING_LEVEL, *args)
-    
-def log_critical(*args):
-    log(CRITICAL_LEVEL, *args)
-
-def log(level, *what):
-    if level <= _log_level:
-        sys.stdout.write(" ".join([ str(x) for x in what]) + "\n")
-
-def set_log_level(level):
-    global _log_level
-    _log_level = level
-
-###
-
 DEFAULT_CACHE_DIR='~/.pony-build'
 def guess_cache_dir(dirname):
-    """Return the full path of the VCS cache directory for the given pkg."""
     parent = os.environ.get('PONY_BUILD_CACHE', DEFAULT_CACHE_DIR)
     parent = os.path.expanduser(parent)
     result = os.path.join(parent, dirname)
 
-    return (parent, result)
-
-def create_cache_dir(cache_dir, dirname):
-    # trim the pkg name so we can create the main cache_dir and not the 
-    # repo dir. I believe it has to be done this way to handle different
-    # user PATH setup (OS's, custom stuff etc)
-
-    # @CTB can't we use os.path.split here, instead?
-    # @CTB refactor create_cache_dir to check to see if it exists, maybe?
-    
-    pkglen = len(dirname) 
-    cache_dir = cache_dir[:-pkglen]
-    
-    if os.path.isdir(cache_dir):
-        log_info('VCS cache_dir %s exists already!' % cache_dir)
-    else:
-        try:
-            log_info('created new VCS cache dir: %s' % cache_dir)
-            os.mkdir(cache_dir)
-        except OSError:
-            log_critical('Unable to create VCS cache_dir: %s' % cache_dir)
-            raise
+    return result
 
 ###
 
+def create_cache_dir(cache_dir, dirname):
+    pkglen = len(dirname)
+    # trim the pkg name so we can create the main cache_dir and not the
+    # repo dir. I believe it has to be done this way to handle different
+    # user PATH setup (OS's, custom stuff etc)
+    tmp_cache_dir = cache_dir[:-pkglen]
+    if os.path.isdir(tmp_cache_dir):
+        print 'cache_dir exists already!'
+        pass
+    else:
+        try:
+            os.mkdir(tmp_cache_dir)
+            print 'Had to create a new cache_dir!'
+        except OSError:
+            print 'Unable to create the cache_dir!!'
+ 
+###
 def _replace_variables(cmd, variables_d):
     if cmd.startswith('PB:'):
         cmd = variables_d[cmd[3:]]
     return cmd
 
-def _run_command(command_list, cwd=None, variables=None, extra_kwargs={}):
+def _run_command(command_list, cwd=None, variables=None, extra_kwargs={},
+                 verbose=False):
     if variables:
         x = []
         for cmd in command_list:
@@ -104,11 +72,12 @@ def _run_command(command_list, cwd=None, variables=None, extra_kwargs={}):
     if extra_kwargs:
         default_kwargs.update(extra_kwargs)
 
-    log_debug('_run_command cwd', os.getcwd())
-    log_debug('_run_command running in ->', cwd)
-    log_debug('_run_command command list:', command_list)
-    log_debug('_run_command default kwargs:', default_kwargs)
-
+    if verbose:
+        print 'CWD', os.getcwd()
+        print 'running in ->', cwd
+        print 'command_list:', command_list
+        print 'default kwargs:', default_kwargs
+        
     try:
         p = subprocess.Popen(command_list, cwd=cwd, **default_kwargs)
 
@@ -119,20 +88,18 @@ def _run_command(command_list, cwd=None, variables=None, extra_kwargs={}):
         err = traceback.format_exc()
         ret = -1
 
-    log_debug('_run_command status', str(ret))
-    log_debug('_run_command stdout', out)
-    log_debug('_run_command stderr', err)
-
+    if verbose:
+        print 'status:', ret
+    
     return (ret, out, err)
 
 class FileToUpload(object):
     def __init__(self, filename, location, description, visible):
         """
-        filename - name to publish as
-        location - full location on build system (not sent to server)
-        description - brief description of file/arch for server
-        """
-        
+filename - name to publish as
+location - full location on build system (not sent to server)
+description - brief description of file/arch for server
+"""
         self.data = open(location, 'rb').read()
         self.filename = filename
         self.description = description
@@ -179,7 +146,7 @@ class TempDirectoryContext(Context):
         self.tempdir = tempfile.mkdtemp()
         self.cwd = os.getcwd()
 
-        log_info('changing to temp directory:', self.tempdir)
+        print 'changing to temp directory:', self.tempdir
         os.chdir(self.tempdir)
 
 def finish(self):
@@ -188,25 +155,24 @@ def finish(self):
         Context.finish(self)
     finally:
         if self.cleanup:
-            log_info('removing', self.tempdir)
+            print 'removing', self.tempdir
             shutil.rmtree(self.tempdir, ignore_errors=True)
 
 def update_client_info(self, info):
-    Context.update_client_info(self, info)
-    info['tempdir'] = self.tempdir
+        Context.update_client_info(self, info)
+        info['tempdir'] = self.tempdir
 
 class VirtualenvContext(Context):
     """
-    A context that works within a new virtualenv.
+    A context that creates a new virtualenv and does everything within that
+    environment.
 
-    VirtualenvContext works by modifying the path to the Python executable.
+    VirtualenvContext works by modifying the 
     """
-    def __init__(self, always_cleanup=True, dependencies=[], optional=[],
-                 python='python'):
+    def __init__(self, always_cleanup=True, dependencies=[], python='python'):
         Context.__init__(self)
         self.cleanup = always_cleanup
         self.dependencies = dependencies
-        self.optional = optional        # optional dependencies
         self.python = python
 
         # Create the virtualenv. Have to do this here so that commands can use
@@ -215,54 +181,31 @@ class VirtualenvContext(Context):
 
         self.tempdir = tempfile.mkdtemp()
 
-        log_inf('creating virtualenv')
-        cmdlist = [python, '-m', 'virtualenv', '--no-site-packages',
-                   self.tempdir]
-        (ret, out, err) = _run_command(cmdlist)
-
-        if ret != 0:
-            raise Exception("error in running virtualenv: %s, %s" % (out, err))
+        print 'creating virtualenv'
+        _run_command([python, '-m', 'virtualenv', '--no-site-packages',
+                      self.tempdir])
 
         # calculate where a few things live so we can easily shell out to 'em
         bindir = os.path.join(self.tempdir, 'bin')
-
+        
         self.python = os.path.join(bindir, 'python')
         self.easy_install = os.path.join(bindir, 'easy_install')
         self.pip = os.path.join(bindir, 'pip')
-
-        os.environ['PATH'] = bindir + os.pathsep + os.environ['PATH']
+    
+	os.environ['PATH'] = bindir + os.pathsep + os.environ['PATH']
 
     def initialize(self):
         Context.initialize(self)
-        log_info('changing to temp directory:', self.tempdir)
-        
+        print 'changing to temp directory:', self.tempdir
         self.cwd = os.getcwd()
         os.chdir(self.tempdir)
-
+         
         # install pip, then use it to install any packages desired
-        log_info('installing pip')
-
-        (ret, out, err) = _run_command([self.easy_install, '-U', 'pip'])
-        if ret != 0:
-            raise Exception("error in installing pip: %s, %s" % (out, err))
-        
+        print 'installing pip'
+        _run_command([self.easy_install, '-U', 'pip'])
         for dep in self.dependencies:
-            log_info('installing dependency:', dep)
-            (ret, out, err) = _run_command([self.pip, 'install', '-U', '-I',
-                                            dep])
-
-            if ret != 0:
-                raise Exception("pip cannot install req dependency: %s" % dep)
-            
-        for dep in self.optional:
-            log_info("installing optional dependency:", dep)
-            (ret, out, err) = _run_command([self.pip, 'install', '-U', '-I',
-                                            dep])
-
-            # @CTB should record failed installs of optional packages
-            # to client?
-            if ret != 0:
-                log_warning("pip cannot install optional dependency: %s" % dep)
+            print "installing", dep
+            _run_command([self.pip, 'install', '-U', '-I'] + [dep])
 
     def finish(self):
         os.chdir(self.cwd)
@@ -270,23 +213,20 @@ class VirtualenvContext(Context):
             Context.finish(self)
         finally:
             if self.cleanup:
-                log_info("VirtualenvContext: removing", self.tempdir)
+                print 'removing', self.tempdir
                 shutil.rmtree(self.tempdir, ignore_errors=True)
 
     def update_client_info(self, info):
         Context.update_client_info(self, info)
         info['tempdir'] = self.tempdir
         info['virtualenv'] = True
-        info['dependencies'] = self.dependencies
-        info['optional'] = self.optional
+	info['dependencies'] = self.dependencies
 
 
 class UploadAFile(object):
     """
-    A build command that arranges to upload a specific file to the server.
-    
-    @CTB add glob support!
-    """
+@CTB add glob support
+"""
     def __init__(self, filepath, public_name, description, visible=True):
         self.filepath = os.path.realpath(filepath)
         self.public_name = public_name
@@ -315,7 +255,8 @@ class UploadAFile(object):
 
 class BaseCommand(object):
     def __init__(self, command_list, name='', run_cwd=None,
-                 subprocess_kwargs=None, ignore_failure=False):
+                 subprocess_kwargs=None, ignore_failure=False,
+                 verbose=False):
         self.command_list = command_list
         if name:
             self.command_name = name
@@ -333,6 +274,7 @@ class BaseCommand(object):
             self.subprocess_kwargs = dict(subprocess_kwargs)
 
         self.ignore_failure = ignore_failure
+        self.verbose = verbose
 
     def __repr__(self):
         return "%s (%s)" % (self.command_name, self.command_type)
@@ -344,7 +286,8 @@ class BaseCommand(object):
         start = time.time()
         (ret, out, err) = _run_command(self.command_list, cwd=self.run_cwd,
                                        variables=self.variables,
-                                       extra_kwargs=self.subprocess_kwargs)
+                                       extra_kwargs=self.subprocess_kwargs,
+                                       verbose=self.verbose)
 
         self.status = ret
         self.output = out
@@ -398,307 +341,325 @@ class PythonPackageEgg(BaseCommand):
                                            'an egg installation file',
                                            visible=True)
 
-class _VersionControlClientBase(SetupCommand):
-    """
-    Base class for version control clients.
 
-    Subclasses should define:
-
-      - get_dirname()
-      - update_repository()
-      - create_repository(url, dirname, step='stepname')
-      - record_repository_info(dirname)
-
-    and optionally override 'get_results()'.
-    
-    """
-    
-    def __init__(self, use_cache=True, **kwargs):
-        SetupCommand.__init__(self, [], **kwargs)
-        self.use_cache = use_cache
-
-        self.duration = -1
-        self.version_info = ''
-        self.results_dict = {}
-
-    def run(self, context):
-        # dirname is the directory created by a succesful checkout.
-        dirname = self.get_dirname()
-
-        # cwd is the directory we're going to ultimately put dirname under.
-        cwd = os.getcwd()
-
-        # NOTE: we flat out don't like the situation where the
-        # directory already exists.  Force a clean checkout.
-        assert not os.path.exists(dirname)
-        
-        if self.use_cache:
-            # 'repo_dir' is the full cache directory containing the repo.
-            # this will be something like '~/.pony-build/<dirname>'.
-            #
-            # 'cache_dir' is the parent dir.
-            
-            cache_dir, repo_dir = guess_cache_dir(dirname)
-            
-            # does the repo already exist?
-            if os.path.exists(repo_dir):              # YES
-                os.chdir(repo_dir)
-                log_info('changed to: ', repo_dir, 'to do fetch.')
-                self.update_repository()
-            else:                                     # NO
-                # do a clone to create the repo dir
-                log_info('changing to: ' + cache_dir + ' to make new repo dir')
-                os.chdir(cache_dir)
-
-                self.create_repository(self.repository, dirname,
-                                       step='create cache')
-                assert os.path.isdir(repo_dir)
-                
-            os.chdir(cwd)
-
-            log_info('Using the local cache at %s for cloning' % repo_dir)
-            location = repo_dir
-        else:
-            location = self.repository
-
-        self.create_repository(location, dirname, step='clone')
-
-        if not os.path.exists(dirname) and os.path.isdir(dirname):
-            log_critical('wrong guess; %s does not exist. whoops' % (dirname,))
-            raise Exception
-
-        # get some info on what our repository version is
-        self.record_repository_info(dirname)
-        # record the build directory, too.
-        context.build_dir = os.path.join(os.getcwd(), dirname)
-        # signal success!
-        self.status = 0
-
-    def get_results(self):
-        self.results_dict['out'] = self.results_dict['errout'] = ''
-        self.results_dict['status'] = self.status
-        self.results_dict['type'] = self.command_type
-        self.results_dict['name'] = self.command_name
-
-        return self.results_dict
-
-class GitClone(_VersionControlClientBase):
-    """Check out and/or update a git repository."""
-    
+class GitClone(SetupCommand):
     command_name = 'checkout'
 
-    def __init__(self, repository, branch='master', use_cache=True, **kwargs):
-        _VersionControlClientBase.__init__(self, use_cache=use_cache, **kwargs)
-        
+    def __init__(self, repository, branch='master', cache_dir=None,
+                 use_cache=True, **kwargs):
+        SetupCommand.__init__(self, [], **kwargs)
         self.repository = repository
         self.branch = branch
 
-    def get_dirname(self):
-        "Calculate the directory name resulting from a successful checkout."
-        p = urlparse.urlparse(self.repository)
-        path = p[2]                     # urlparse -> path
+        self.use_cache = use_cache
+        self.cache_dir = cache_dir
+        if cache_dir:
+            self.cache_dir = os.path.expanduser(cache_dir)
+
+        self.duration = -1
+        self.version_info = ''
+
+        self.results_dict = {}
+
+    def run(self, context):
+        # first, guess the co dir name
+        p = urlparse.urlparse(self.repository) # what about Windows path names?
+        path = p.path
 
         dirname = path.rstrip('/').split('/')[-1]
         if dirname.endswith('.git'):
             dirname = dirname[:-4]
-            
-        log_info('git checkout dirname guessed as: %s' % (dirname,))
-        return dirname
 
-    def update_repository(self):
-        branchspec = '%s:%s' % (self.branch, self.branch)
-        cmdlist = ['git', 'fetch', '-ufv', self.repository, branchspec]
-        print '***', cmdlist
-        (ret, out, err) = _run_command(cmdlist)
+        print 'git checkout dirname guessed as: %s' % (dirname,)
 
-        self.results_dict['cache_update'] = dict(status=ret, output=out,
-                                                 errout=err,
-                                                 command=str(cmdlist))
+        if self.use_cache:
+            cache_dir = self.cache_dir
+            if not cache_dir:
+                cache_dir = guess_cache_dir(dirname)
 
-        if ret != 0:
-            raise Exception("cannot update cache: %s" % repo_dir)
+        ##
 
-        cmdlist = ['git', 'checkout', '-f', self.branch]
-        (ret, out, err) = _run_command(cmdlist)
-
-        self.results_dict['cache_checkout_head'] = dict(status=ret, output=out,
-                                                        errout=err,
-                                                        command=str(cmdlist))
-
-        if ret != 0:
-            raise Exception("cannot reset cache: %s" % repo_dir)
-
-    def create_repository(self, url, dirname, step='clone'):
-        cmdlist = ['git', 'clone', url]
-        (ret, out, err) = _run_command(cmdlist)
-
-       	self.results_dict[step] = dict(status=ret, output=out, errout=err,
-                                          command=str(cmdlist))
-
-        if ret != 0:
+        if self.use_cache and cache_dir:
             cwd = os.getcwd()
-            raise Exception("cannot clone repository %s in %s" % (url, cwd))
-
-        if self.branch != 'master':
-            # fetch the right branch
+            os.chdir(cache_dir)
             branchspec = '%s:%s' % (self.branch, self.branch)
             cmdlist = ['git', 'fetch', '-ufv', self.repository, branchspec]
-            (ret, out, err) = _run_command(cmdlist, dirname)
-            assert ret == 0, (out, err)
+            (ret, out, err) = _run_command(cmdlist)
 
-            # check out the right branch
-            cmdlist = ['git', 'checkout', '-f', self.branch]
-            (ret, out, err) = _run_command(cmdlist, dirname)
-            assert ret == 0, (out, err)
+            self.results_dict['cache_update'] = \
+                     dict(status=ret, output=out, errout=err,
+                          command=str(cmdlist))
 
-    def record_repository_info(self, repo_dir):
+            if ret != 0:
+                return
+
+            os.chdir(cwd)
+
+        ##
+
+        print cmdlist, out
+
+        # now, do a clone, from either the parent OR the local cache
+        location = self.repository
+        if cache_dir:
+            location = cache_dir
+
+        cmdlist = ['git', 'clone', self.repository]
+        (ret, out, err) = _run_command(cmdlist)
+
+        self.results_dict['clone'] = \
+                 dict(status=ret, output=out, errout=err,
+                      command=str(cmdlist))
+        if ret != 0:
+            return
+
+        print cmdlist, out
+
+        if not os.path.exists(dirname) and os.path.isdir(dirname):
+            print 'wrong guess; %s does not exist. whoops' % (dirname,)
+            self.status = -1
+            return
+
+        ##
+
+        # check out the right branch
+        if self.branch != 'master':
+            cmdlist = ['git', 'checkout', 'origin/'+self.branch]
+            (ret, out, err) = _run_command(cmdlist, dirname)
+
+            print cmdlist, out
+
+            self.results_dict['checkout+origin'] = \
+                    dict(status=ret, output=out, errout=err,
+                         command=str(cmdlist), branch=self.branch)
+            if ret != 0:
+                return
+
+            cmdlist = ['git', 'checkout', '-b', self.branch]
+
+            print cmdlist, out
+
+            (ret, out, err) = _run_command(cmdlist, dirname)
+            self.results_dict['checkout+-b'] = \
+                    dict(status=ret, output=out, errout=err,
+                         command=str(cmdlist), branch=self.branch)
+            if ret != 0:
+                return
+
+        # get some info on what our HEAD is
         cmdlist = ['git', 'log', '-1', '--pretty=oneline']
-        (ret, out, err) = _run_command(cmdlist, repo_dir)
+        (ret, out, err) = _run_command(cmdlist, dirname)
 
         assert ret == 0, (cmdlist, ret, out, err)
 
         self.version_info = out.strip()
 
+        self.status = 0
+
+        # set the build directory, too.
+        context.build_dir = os.path.join(os.getcwd(),
+                                         dirname)
+
     def get_results(self):
-        # first, update basic
-        _VersionControlClientBase.get_results(self)
-        
+        self.results_dict['out'] = self.results_dict['errout'] = ''
+        self.results_dict['command'] = 'GitClone(%s, %s)' % (self.repository,
+                                                             self.branch)
+        self.results_dict['status'] = self.status
+        self.results_dict['type'] = self.command_type
+        self.results_dict['name'] = self.command_name
+
         self.results_dict['version_type'] = 'git'
         if self.version_info:
             self.results_dict['version_info'] = self.version_info
 
-        self.results_dict['command'] = 'GitClone(%s, %s)' % (self.repository,
-                                                             self.branch)
-
         return self.results_dict
 
-class HgClone(_VersionControlClientBase):
-    """Check out or update an Hg (Mercurial) repository."""
+class HgClone(SetupCommand):
     command_name = 'checkout'
 
-    def __init__(self, repository, branch='default', use_cache=True, **kwargs):
-        _VersionControlClientBase.__init__(self, use_cache=use_cache, **kwargs)
+    def __init__(self, repository, branch='default', cache_dir=None,
+                 use_cache=True, **kwargs):
+        SetupCommand.__init__(self, [], **kwargs)
         self.repository = repository
         self.branch = branch
         assert branch == 'default'
 
-    def get_dirname(self):
-        "Calculate the directory name resulting from a successful checkout."
-        p = urlparse.urlparse(self.repository)
-        path = p[2]                     # urlparse -> path
+        self.use_cache = use_cache
+        self.cache_dir = cache_dir
+        if cache_dir:
+            self.cache_dir = os.path.expanduser(cache_dir)
+
+        self.duration = -1
+        self.version_info = ''
+
+        self.results_dict = {}
+
+    def run(self, context):
+        # first, guess the co dir name
+        p = urlparse.urlparse(self.repository) # what about Windows path names?
+        path = p.path
 
         dirname = path.rstrip('/').split('/')[-1]
-        log_info('git checkout dirname guessed as: %s' % (dirname,))
-        return dirname
+        print dirname
 
-    def update_repository(self):
-        cmdlist = ['hg', 'pull', self.repository]
-        (ret, out, err) = _run_command(cmdlist)
+        print 'hg checkout dirname guessed as: %s' % (dirname,)
 
-        self.results_dict['cache_pull'] = dict(status=ret, output=out,
-                                               errout=err,
-                                               command=str(cmdlist))
+        if self.use_cache:
+            cache_dir = self.cache_dir
+            if not cache_dir:
+                cache_dir = guess_cache_dir(dirname)
 
-        if ret != 0:
-            raise Exception, "cannot pull from %s" % self.repository
+        ##
 
-        cmdlist = ['hg', 'update', '-C']
-        (ret, out, err) = _run_command(cmdlist)
-
-        self.results_dict['cache_update'] = \
-             dict(status=ret, output=out, errout=err,
-                  command=str(cmdlist))
-
-        assert ret == 0, (out, err)
-
-    def create_repository(self, url, dirname, step='clone'):
-        cmdlist = ['hg', 'clone', url]
-        (ret, out, err) = _run_command(cmdlist)
-
-       	self.results_dict[step] = dict(status=ret, output=out, errout=err,
-                                       command=str(cmdlist))
-
-        if ret != 0:
+        if self.use_cache and cache_dir:
             cwd = os.getcwd()
-            raise Exception("cannot clone repository %s in %s" % (url, cwd))
+            if os.path.isdir(cache_dir):
+                os.chdir(cache_dir)
+                cmdlist = ['hg', 'pull']
+                (ret, out, err) = _run_command(cmdlist)
 
-        # @CTB branch stuff unimplemented
-            
-    def record_repository_info(self, repo_dir):
+                self.results_dict['cache_pull'] = \
+                     dict(status=ret, output=out, errout=err,
+                          command=str(cmdlist))
+
+                if ret != 0:
+                    return
+
+                cmdlist = ['hg', 'update', '-C']
+                (ret, out, err) = _run_command(cmdlist)
+                
+                self.results_dict['cache_update'] = \
+                     dict(status=ret, output=out, errout=err,
+                          command=str(cmdlist))
+                
+
+                if ret != 0:
+                    return
+            else:
+                #assert 0
+                print "just a print statment"
+            os.chdir(cwd)
+
+        ##
+
+        #print cmdlist, out
+
+        # now, do a clone, from either the parent OR the local cache
+        location = self.repository
+        if cache_dir:
+            location = cache_dir
+
+        cmdlist = ['hg', 'clone', self.repository]
+        (ret, out, err) = _run_command(cmdlist)
+
+        self.results_dict['checkout'] = \
+                 dict(status=ret, output=out, errout=err,
+                      command=str(cmdlist))
+        if ret != 0:
+            return
+
+        print cmdlist, out
+        print 'hello'
+        if not os.path.exists(dirname) and os.path.isdir(dirname):
+            print 'wrong guess; %s does not exist. whoops' % (dirname,)
+            self.status = -1
+            return
+
+        ##
+
         # get some info on what our HEAD is
-        cmdlist = ['hg', 'id', '-nib']
-        (ret, out, err) = _run_command(cmdlist, repo_dir)
-        assert ret == 0, (cmdlist, ret, out, err)
-        self.version_info = out.strip()
+#        cmdlist = ['git', 'log', '-1', '--pretty=oneline']
+#        (ret, out, err) = _run_command(cmdlist, dirname)
+
+#        assert ret == 0, (cmdlist, ret, out, err)
+
+#        self.version_info = out.strip()
+
+        self.status = 0
+
+        # set the build directory, too.
+        context.build_dir = os.path.join(os.getcwd(),
+                                         dirname)
 
     def get_results(self):
-        # first, update basic
-        _VersionControlClientBase.get_results(self)
-        
+        self.results_dict['out'] = self.results_dict['errout'] = ''
         self.results_dict['command'] = 'HgCheckout(%s, %s)' % (self.repository,
                                                                self.branch)
+        self.results_dict['status'] = self.status
+        self.results_dict['type'] = self.command_type
+        self.results_dict['name'] = self.command_name
+
         self.results_dict['version_type'] = 'hg'
         if self.version_info:
             self.results_dict['version_info'] = self.version_info
 
         return self.results_dict
 
-class SvnCheckout(_VersionControlClientBase):
-    """Check out or update a subversion repository."""
+class SvnUpdate(SetupCommand):
     command_name = 'checkout'
 
-    def __init__(self, dirname, repository, use_cache=True, **kwargs):
-        _VersionControlClientBase.__init__(self, use_cache=use_cache)
-        
-        self.dirname = dirname
+    def __init__(self, dirname, repository, cache_dir=None, **kwargs):
+        SetupCommand.__init__(self, [], **kwargs)
         self.repository = repository
 
-    def get_dirname(self):
-        return self.dirname
+        self.cache_dir = None
+        if cache_dir:
+            self.cache_dir = os.path.expanduser(cache_dir)
+        self.duration = -1
+        self.dirname = dirname
 
-    def update_repository(self):
-        cmdlist = ['svn', 'update', '--accept', 'theirs-full']
-        (ret, out, err) = _run_command(cmdlist)
+    def run(self, context):
+        dirname = self.dirname
 
-        self.results_dict['svn update'] = dict(status=ret, output=out,
-                                               errout=err,
-                                               command=str(cmdlist))
+        ##
 
-        if ret != 0:
-            log_critical("cannot svn update")
-            raise Exception, (cmdlist, ret, out, err)
-
-    def create_repository(self, url, dirname, step='clone'):
-        if os.path.isdir(url):          # local dir? COPY.
-            shutil.copytree(url, dirname)
-        else:                           # remote repo? CO.
-            cmdlist = ['svn', 'co', url, dirname]
+        if self.cache_dir:
+            print 'updating cache dir:', self.cache_dir
+            cwd = os.getcwd()
+            os.chdir(self.cache_dir)
+            cmdlist = ['svn', 'update']
             (ret, out, err) = _run_command(cmdlist)
-
-            self.results_dict[step] = dict(status=ret, output=out, errout=err,
-                                           command=str(cmdlist))
-
             if ret != 0:
-                log_critical("cannot svn checkout %s into %s" % (url, dirname))
-                raise Exception, "cannot svn checkout %s into %s" % (url, dirname)
+                self.command_list = cmdlist
+                self.status = ret
+                self.output = out
+                self.errout = err
+                return
 
-    def record_repository_info(self, repo_dir):
-        cmdlist = ['svnversion']
-        (ret, out, err) = _run_command(cmdlist, repo_dir)
-        assert ret == 0, (cmdlist, ret, out, err)
-        self.version_info = out.strip()
+            subdir = os.path.join(cwd, dirname)
+            shutil.copytree(self.cache_dir, subdir)
 
-    def get_results(self):
-        # first, update basic
-        _VersionControlClientBase.get_results(self)
-        
-        self.results_dict['command'] = 'SvnCheckout(%s, %s)' %(self.repository,
-                                                               self.dirname)
-        self.results_dict['version_type'] = 'hg'
-        if self.version_info:
-            self.results_dict['version_info'] = self.version_info
+            os.chdir(subdir)
+        else:
+            cmdlist = ['svn', 'co', self.repository, dirname]
 
-        return self.results_dict
+            (ret, out, err) = _run_command(cmdlist)
+            if ret != 0:
+                self.command_list = cmdlist
+                self.status = ret
+                self.output = out
+                self.errout = err
+
+                return
+
+            print cmdlist, out
+
+            if not os.path.exists(dirname) and os.path.isdir(dirname):
+                self.command_list = cmdlist
+                self.status = -1
+                self.output = ''
+                self.errout = 'pony-build-client cannot find expected svn dir: %s' % (dirname,)
+
+                print 'wrong guess; %s does not exist. whoops' % (dirname,)
+                return
+
+            os.chdir(dirname)
+
+        ##
+
+        self.status = 0 # success
+        self.output = ''
+        self.errout = ''
 
 ###
 
@@ -713,7 +674,7 @@ def get_arch():
 ###
 
 def _send(server, info, results):
-    log_info('connecting to', server)
+    print 'connecting to', server
     s = xmlrpclib.ServerProxy(server, allow_none=True)
     (result_key, auth_key) = s.add_results(info, results)
     return str(auth_key)
@@ -739,8 +700,8 @@ def _upload_file(server_url, fileobj, auth_key):
     try:
         http_result = urllib.urlopen(upload_url, fileobj.data)
     except:
-        log_warning('file upload failed:', str(fileobj))
-        log_warning(traceback.format_exc())
+        print 'file upload failed:', fileobj
+        print traceback.format_exc()
 
 def do(name, commands, context=None, arch=None, stop_if_failure=True):
     reslist = []
@@ -749,7 +710,7 @@ def do(name, commands, context=None, arch=None, stop_if_failure=True):
         context.initialize()
 
     for c in commands:
-        log_debug('running:', str(c))
+        print 'running:', c
         if context:
             context.start_command(c)
         c.run(context)
@@ -767,11 +728,7 @@ def do(name, commands, context=None, arch=None, stop_if_failure=True):
     if arch is None:
         arch = get_arch()
 
-    success = True
-    for c in commands:
-        if not c.success():
-            success = False
-            break
+    success = all([ c.success() for c in commands ])
 
     client_info = dict(package=name, arch=arch, success=success)
     files_to_upload = None
@@ -794,12 +751,12 @@ def send(server_url, x, hostname=None, tags=()):
     client_info['tags'] = tags
 
     server_url = get_server_url(server_url)
-    log_info('using server URL:', server_url)
+    print 'using server URL:', server_url
     auth_key = _send(server_url, client_info, reslist)
 
     if files_to_upload:
         for fileobj in files_to_upload:
-            log_debug('uploading', str(fileobj))
+            print 'uploading', fileobj
             _upload_file(server_url, fileobj, auth_key)
 
 def check(name, server_url, tags=(), hostname=None, arch=None, reserve_time=0):
@@ -817,7 +774,7 @@ def check(name, server_url, tags=(), hostname=None, arch=None, reserve_time=0):
 
 def get_server_url(server_name):
     try_url = urlparse.urlparse(server_name)
-    if try_url[0]:                      # urlparse -> scheme
+    if try_url.scheme:
         server_url = server_name
     else: # not a URL?
         server_url = pb_servers[server_name]
@@ -852,42 +809,14 @@ def parse_cmdline(argv=[]):
     cmdline.add_option('-v', '--verbose', dest='verbose',
                        action='store_true', default=False,
                        help='set verbose reporting')
-                       
-    cmdline.add_option('-e', '--python-executable', dest='python_executable',
-                       action='store', default='python',
-                       help='override the version of python used to build with')
-                       
-    cmdline.add_option('-t', '--tagset', dest='tagset',
-                       action='store', default=[],
-                       help='comma-delimited list of tags to be applied')
 
     if not argv:
         (options, args) = cmdline.parse_args()
     else:
         (options, args) = cmdline.parse_args(argv)
-        
-    # parse the tagset
-    if options.tagset:
-        options.tagset = options.tagset.split(',')
-        
-    # there should be nothing in args.
-    # if there is, print a warning, then crash and burn.
-    if args:
-        print "Error--unknown arguments detected.  Failing..."
-        sys.exit(0)
 
     return options, args
 
-
-###
-
-
-def test_python_version(python_exe):
-    result = subprocess.Popen(python_exe + " -c \"print 'hello, world'\"", shell=True, \
-                    stdout=subprocess.PIPE).communicate()
-    if result[0] != "hello, world\n":
-        return False
-    return True
 
 ###
 
@@ -927,7 +856,7 @@ recipes = {
                          Python_package_egg
              ]),
     'twill' : (get_python_config,
-               [ SvnCheckout('twill', 'http://twill.googlecode.com/svn/branches/0.9.2-dev/twill', cache_dir='~/.pony-build/twill'),
+               [ SvnUpdate('twill', 'http://twill.googlecode.com/svn/branches/0.9.2-dev/twill', cache_dir='~/.pony-build/twill'),
                  PythonBuild,
                  PythonTest
              ]),
