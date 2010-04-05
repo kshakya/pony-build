@@ -14,7 +14,7 @@ if args:
 repo_url = 'http://bitbucket.org/jpellerin/nose/'
  
 tags = ['nose']
-name = 'build-nose'
+name = 'nose'
  
 server_url = options.server_url
  
